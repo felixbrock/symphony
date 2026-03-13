@@ -4,6 +4,7 @@ defmodule SymphonyElixir.ExtensionsTest do
   import Phoenix.ConnTest
   import Phoenix.LiveViewTest
 
+  alias SymphonyElixir.Codex.ReasoningLog
   alias SymphonyElixir.Linear.Adapter
   alias SymphonyElixir.Tracker.Memory
 
@@ -350,6 +351,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "state" => "In Progress",
                  "worker_host" => nil,
                  "workspace_path" => nil,
+                 "reasoning_log_path" => nil,
                  "session_id" => "thread-http",
                  "turn_count" => 7,
                  "last_event" => "notification",
@@ -366,6 +368,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "attempt" => 2,
                  "due_at" => state_payload["retrying"] |> List.first() |> Map.fetch!("due_at"),
                  "error" => "boom",
+                 "reasoning_log_path" => nil,
                  "worker_host" => nil,
                  "workspace_path" => nil
                }
@@ -394,6 +397,7 @@ defmodule SymphonyElixir.ExtensionsTest do
              "running" => %{
                "worker_host" => nil,
                "workspace_path" => nil,
+               "reasoning_log_path" => nil,
                "session_id" => "thread-http",
                "turn_count" => 7,
                "state" => "In Progress",
@@ -404,7 +408,15 @@ defmodule SymphonyElixir.ExtensionsTest do
                "tokens" => %{"input_tokens" => 4, "output_tokens" => 8, "total_tokens" => 12}
              },
              "retry" => nil,
-             "logs" => %{"codex_session_logs" => []},
+             "logs" => %{
+               "codex_session_logs" => [
+                 %{
+                   "label" => "latest",
+                   "path" => ReasoningLog.path_for_issue("MT-HTTP"),
+                   "url" => nil
+                 }
+               ]
+             },
              "recent_events" => [],
              "last_error" => nil,
              "tracked" => %{}
