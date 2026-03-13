@@ -3,8 +3,6 @@ defmodule SymphonyElixir.CLI do
   Escript entrypoint for running Symphony with an explicit WORKFLOW.md path.
   """
 
-  alias SymphonyElixir.LogFile
-
   @acknowledgement_switch :i_understand_that_this_will_be_running_without_the_usual_guardrails
   @switches [{@acknowledgement_switch, :boolean}, logs_root: :string, port: :integer]
 
@@ -144,7 +142,7 @@ defmodule SymphonyElixir.CLI do
   end
 
   defp set_logs_root(logs_root) do
-    Application.put_env(:symphony_elixir, :log_file, LogFile.default_log_file(logs_root))
+    Application.put_env(:symphony_elixir, :log_file, Path.join(logs_root, "symphony.log"))
     :ok
   end
 

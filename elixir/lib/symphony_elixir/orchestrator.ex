@@ -7,7 +7,7 @@ defmodule SymphonyElixir.Orchestrator do
   require Logger
   import Bitwise, only: [<<<: 2]
 
-  alias SymphonyElixir.{AgentRunner, Config, StatusDashboard, Tracker, Workspace}
+  alias SymphonyElixir.{AgentRunner, Codex.ReasoningLog, Config, StatusDashboard, Tracker, Workspace}
   alias SymphonyElixir.Linear.Issue
 
   @continuation_retry_delay_ms 1_000
@@ -140,7 +140,8 @@ defmodule SymphonyElixir.Orchestrator do
                 identifier: running_entry.identifier,
                 delay_type: :continuation,
                 worker_host: Map.get(running_entry, :worker_host),
-                workspace_path: Map.get(running_entry, :workspace_path)
+                workspace_path: Map.get(running_entry, :workspace_path),
+                reasoning_log_path: Map.get(running_entry, :reasoning_log_path)
               })
 
             _ ->
@@ -152,7 +153,8 @@ defmodule SymphonyElixir.Orchestrator do
                 identifier: running_entry.identifier,
                 error: "agent exited: #{inspect(reason)}",
                 worker_host: Map.get(running_entry, :worker_host),
-                workspace_path: Map.get(running_entry, :workspace_path)
+                workspace_path: Map.get(running_entry, :workspace_path),
+                reasoning_log_path: Map.get(running_entry, :reasoning_log_path)
               })
           end
 
@@ -190,6 +192,7 @@ defmodule SymphonyElixir.Orchestrator do
 
       running_entry ->
         {updated_running_entry, token_delta} = integrate_codex_update(running_entry, update)
+        :ok = append_reasoning_log(updated_running_entry, update)
 
         state =
           state
@@ -479,7 +482,8 @@ defmodule SymphonyElixir.Orchestrator do
       |> terminate_running_issue(issue_id, false)
       |> schedule_issue_retry(issue_id, next_attempt, %{
         identifier: identifier,
-        error: "stalled for #{elapsed_ms}ms without codex activity"
+        error: "stalled for #{elapsed_ms}ms without codex activity",
+        reasoning_log_path: Map.get(running_entry, :reasoning_log_path)
       })
     else
       state
@@ -696,6 +700,8 @@ defmodule SymphonyElixir.Orchestrator do
          end) do
       {:ok, pid} ->
         ref = Process.monitor(pid)
+        reasoning_log_path = ReasoningLog.path_for_issue(issue.identifier)
+        :ok = reset_reasoning_log(issue.identifier)
 
         Logger.info("Dispatching issue to agent: #{issue_context(issue)} pid=#{inspect(pid)} attempt=#{inspect(attempt)} worker_host=#{worker_host || "local"}")
 
@@ -707,6 +713,7 @@ defmodule SymphonyElixir.Orchestrator do
             issue: issue,
             worker_host: worker_host,
             workspace_path: nil,
+            reasoning_log_path: reasoning_log_path,
             session_id: nil,
             last_codex_message: nil,
             last_codex_timestamp: nil,
@@ -737,7 +744,8 @@ defmodule SymphonyElixir.Orchestrator do
         schedule_issue_retry(state, issue.id, next_attempt, %{
           identifier: issue.identifier,
           error: "failed to spawn agent: #{inspect(reason)}",
-          worker_host: worker_host
+          worker_host: worker_host,
+          reasoning_log_path: ReasoningLog.path_for_issue(issue.identifier)
         })
     end
   end
@@ -782,6 +790,7 @@ defmodule SymphonyElixir.Orchestrator do
     error = pick_retry_error(previous_retry, metadata)
     worker_host = pick_retry_worker_host(previous_retry, metadata)
     workspace_path = pick_retry_workspace_path(previous_retry, metadata)
+    reasoning_log_path = pick_retry_reasoning_log_path(previous_retry, metadata)
 
     if is_reference(old_timer) do
       Process.cancel_timer(old_timer)
@@ -804,7 +813,8 @@ defmodule SymphonyElixir.Orchestrator do
             identifier: identifier,
             error: error,
             worker_host: worker_host,
-            workspace_path: workspace_path
+            workspace_path: workspace_path,
+            reasoning_log_path: reasoning_log_path
           })
     }
   end
@@ -816,7 +826,8 @@ defmodule SymphonyElixir.Orchestrator do
           identifier: Map.get(retry_entry, :identifier),
           error: Map.get(retry_entry, :error),
           worker_host: Map.get(retry_entry, :worker_host),
-          workspace_path: Map.get(retry_entry, :workspace_path)
+          workspace_path: Map.get(retry_entry, :workspace_path),
+          reasoning_log_path: Map.get(retry_entry, :reasoning_log_path)
         }
 
         {:ok, attempt, metadata, %{state | retry_attempts: Map.delete(state.retry_attempts, issue_id)}}
@@ -964,10 +975,47 @@ defmodule SymphonyElixir.Orchestrator do
     metadata[:workspace_path] || Map.get(previous_retry, :workspace_path)
   end
 
+  defp pick_retry_reasoning_log_path(previous_retry, metadata) do
+    metadata[:reasoning_log_path] || Map.get(previous_retry, :reasoning_log_path)
+  end
+
   defp maybe_put_runtime_value(running_entry, _key, nil), do: running_entry
 
   defp maybe_put_runtime_value(running_entry, key, value) when is_map(running_entry) do
     Map.put(running_entry, key, value)
+  end
+
+  defp append_reasoning_log(running_entry, update) when is_map(running_entry) and is_map(update) do
+    case ReasoningLog.append_update(
+           %{
+             issue_id: running_entry.issue.id,
+             issue_identifier: running_entry.identifier,
+             worker_host: Map.get(running_entry, :worker_host),
+             workspace_path: Map.get(running_entry, :workspace_path),
+             session_id: Map.get(running_entry, :session_id)
+           },
+           update
+         ) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Failed to append reasoning log for issue_id=#{running_entry.issue.id} issue_identifier=#{running_entry.identifier}: #{inspect(reason)}")
+        :ok
+    end
+  end
+
+  defp append_reasoning_log(_running_entry, _update), do: :ok
+
+  defp reset_reasoning_log(issue_identifier) when is_binary(issue_identifier) do
+    case ReasoningLog.reset_issue_log(issue_identifier) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Failed to reset reasoning log for issue_identifier=#{issue_identifier}: #{inspect(reason)}")
+        :ok
+    end
   end
 
   defp select_worker_host(%State{} = state, preferred_worker_host) do
@@ -1112,6 +1160,7 @@ defmodule SymphonyElixir.Orchestrator do
           state: metadata.issue.state,
           worker_host: Map.get(metadata, :worker_host),
           workspace_path: Map.get(metadata, :workspace_path),
+          reasoning_log_path: Map.get(metadata, :reasoning_log_path),
           session_id: metadata.session_id,
           codex_app_server_pid: metadata.codex_app_server_pid,
           codex_input_tokens: metadata.codex_input_tokens,
@@ -1136,7 +1185,8 @@ defmodule SymphonyElixir.Orchestrator do
           identifier: Map.get(retry, :identifier),
           error: Map.get(retry, :error),
           worker_host: Map.get(retry, :worker_host),
-          workspace_path: Map.get(retry, :workspace_path)
+          workspace_path: Map.get(retry, :workspace_path),
+          reasoning_log_path: Map.get(retry, :reasoning_log_path)
         }
       end)
 
@@ -1186,6 +1236,7 @@ defmodule SymphonyElixir.Orchestrator do
         last_codex_message: summarize_codex_update(update),
         session_id: session_id_for_update(running_entry.session_id, update),
         last_codex_event: event,
+        reasoning_log_path: Map.get(running_entry, :reasoning_log_path),
         codex_app_server_pid: codex_app_server_pid_for_update(codex_app_server_pid, update),
         codex_input_tokens: codex_input_tokens + token_delta.input_tokens,
         codex_output_tokens: codex_output_tokens + token_delta.output_tokens,

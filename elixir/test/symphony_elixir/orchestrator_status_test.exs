@@ -1,6 +1,8 @@
 defmodule SymphonyElixir.OrchestratorStatusTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.Codex.ReasoningLog
+
   test "snapshot returns :timeout when snapshot server is unresponsive" do
     server_name = Module.concat(__MODULE__, :UnresponsiveSnapshotServer)
     parent = self()
@@ -100,6 +102,289 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
              timestamp: now
            }
   end
+
+  test "orchestrator mirrors agent output into a local readable log file" do
+    issue_id = "issue-reasoning-log"
+    issue_identifier = "MT-303"
+    log_root = Path.join(System.tmp_dir!(), "symphony-reasoning-log-#{System.unique_integer([:positive])}")
+    log_file = Path.join(log_root, "symphony.log")
+    previous_log_file = Application.get_env(:symphony_elixir, :log_file)
+
+    on_exit(fn ->
+      if is_nil(previous_log_file) do
+        Application.delete_env(:symphony_elixir, :log_file)
+      else
+        Application.put_env(:symphony_elixir, :log_file, previous_log_file)
+      end
+
+      File.rm_rf(log_root)
+    end)
+
+    Application.put_env(:symphony_elixir, :log_file, log_file)
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: issue_identifier,
+      title: "Reasoning log test",
+      description: "Capture reasoning updates",
+      state: "In Progress",
+      url: "https://example.org/issues/MT-303"
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :ReasoningLogOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    reasoning_log_path = ReasoningLog.path_for_issue(issue_identifier)
+    :ok = File.mkdir_p(Path.dirname(reasoning_log_path))
+    :ok = File.write(reasoning_log_path, "")
+
+    initial_state = :sys.get_state(pid)
+    started_at = DateTime.utc_now()
+
+    running_entry = %{
+      pid: self(),
+      ref: make_ref(),
+      identifier: issue.identifier,
+      issue: issue,
+      worker_host: "worker-a",
+      workspace_path: "/tmp/MT-303",
+      reasoning_log_path: reasoning_log_path,
+      session_id: "thread-303-turn-1",
+      turn_count: 1,
+      last_codex_message: nil,
+      last_codex_timestamp: nil,
+      last_codex_event: nil,
+      started_at: started_at
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.put(initial_state.claimed, issue_id))
+    end)
+
+    now = DateTime.utc_now()
+
+    send(
+      pid,
+      {:codex_worker_update, issue_id,
+       %{
+         event: :notification,
+         session_id: "thread-303-turn-1",
+         payload: %{
+           method: "item/reasoning/textDelta",
+           params: %{delta: "Investigating the failing integration test"}
+         },
+         timestamp: now
+       }}
+    )
+
+    send(
+      pid,
+      {:codex_worker_update, issue_id,
+       %{
+         event: :notification,
+         session_id: "thread-303-turn-1",
+         payload: %{
+           method: "codex/event/item_started",
+           params: %{msg: %{payload: %{type: "agent_message"}}}
+         },
+         timestamp: now
+       }}
+    )
+
+    send(
+      pid,
+      {:codex_worker_update, issue_id,
+       %{
+         event: :notification,
+         session_id: "thread-303-turn-1",
+         payload: %{
+           method: "item/agentMessage/delta",
+           params: %{delta: "I’m implementing the failing integration fix."}
+         },
+         timestamp: now
+       }}
+    )
+
+    send(
+      pid,
+      {:codex_worker_update, issue_id,
+       %{
+         event: :notification,
+         session_id: "thread-303-turn-1",
+         payload: %{
+           method: "codex/event/item_started",
+           params: %{msg: %{payload: %{type: "agent_message"}}}
+         },
+         timestamp: now
+       }}
+    )
+
+    send(
+      pid,
+      {:codex_worker_update, issue_id,
+       %{
+         event: :notification,
+         session_id: "thread-303-turn-1",
+         payload: %{
+           method: "item/agentMessage/delta",
+           params: %{delta: "Then I’m running the targeted tests."}
+         },
+         timestamp: now
+       }}
+    )
+
+    assert_eventually(fn ->
+      case File.read(reasoning_log_path) do
+        {:ok, contents} ->
+          contents == "I’m implementing the failing integration fix.\n\nThen I’m running the targeted tests."
+
+        _ ->
+          false
+      end
+    end)
+  end
+
+  test "orchestrator separates agent output paragraphs on codex agent message boundaries" do
+    issue_id = "issue-agent-message-boundary-log"
+    issue_identifier = "MT-304"
+    log_root = Path.join(System.tmp_dir!(), "symphony-agent-message-log-#{System.unique_integer([:positive])}")
+    log_file = Path.join(log_root, "symphony.log")
+    previous_log_file = Application.get_env(:symphony_elixir, :log_file)
+
+    on_exit(fn ->
+      if is_nil(previous_log_file) do
+        Application.delete_env(:symphony_elixir, :log_file)
+      else
+        Application.put_env(:symphony_elixir, :log_file, previous_log_file)
+      end
+
+      File.rm_rf(log_root)
+    end)
+
+    Application.put_env(:symphony_elixir, :log_file, log_file)
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: issue_identifier,
+      title: "Agent message boundary log test",
+      description: "Capture agent message boundaries",
+      state: "In Progress",
+      url: "https://example.org/issues/MT-304"
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :AgentMessageBoundaryOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    reasoning_log_path = ReasoningLog.path_for_issue(issue_identifier)
+    :ok = File.mkdir_p(Path.dirname(reasoning_log_path))
+    :ok = File.write(reasoning_log_path, "")
+
+    initial_state = :sys.get_state(pid)
+    started_at = DateTime.utc_now()
+
+    running_entry = %{
+      pid: self(),
+      ref: make_ref(),
+      identifier: issue.identifier,
+      issue: issue,
+      worker_host: "worker-a",
+      workspace_path: "/tmp/MT-304",
+      reasoning_log_path: reasoning_log_path,
+      session_id: "thread-304-turn-1",
+      turn_count: 1,
+      last_codex_message: nil,
+      last_codex_timestamp: nil,
+      last_codex_event: nil,
+      started_at: started_at
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.put(initial_state.claimed, issue_id))
+    end)
+
+    now = DateTime.utc_now()
+
+    send(
+      pid,
+      {:codex_worker_update, issue_id,
+       %{
+         event: :notification,
+         session_id: "thread-304-turn-1",
+         payload: %{
+           method: "item/agentMessage/delta",
+           params: %{delta: "First visible message."}
+         },
+         timestamp: now
+       }}
+    )
+
+    send(
+      pid,
+      {:codex_worker_update, issue_id,
+       %{
+         event: :notification,
+         session_id: "thread-304-turn-1",
+         payload: %{
+           method: "codex/event/agent_message",
+           params: %{msg: %{payload: %{text: "First visible message."}}}
+         },
+         timestamp: now
+       }}
+    )
+
+    send(
+      pid,
+      {:codex_worker_update, issue_id,
+       %{
+         event: :notification,
+         session_id: "thread-304-turn-1",
+         payload: %{
+           method: "item/agentMessage/delta",
+           params: %{delta: "Second visible message."}
+         },
+         timestamp: now
+       }}
+    )
+
+    assert_eventually(fn ->
+      case File.read(reasoning_log_path) do
+        {:ok, contents} ->
+          contents == "First visible message.\n\nSecond visible message."
+
+        _ ->
+          false
+      end
+    end)
+  end
+
+  defp assert_eventually(fun, attempts \\ 20)
+
+  defp assert_eventually(fun, attempts) when attempts > 0 do
+    if fun.() do
+      assert true
+    else
+      Process.sleep(25)
+      assert_eventually(fun, attempts - 1)
+    end
+  end
+
+  defp assert_eventually(_fun, 0), do: flunk("condition was not met in time")
 
   test "orchestrator snapshot tracks codex thread totals and app-server pid" do
     issue_id = "issue-usage-snapshot"

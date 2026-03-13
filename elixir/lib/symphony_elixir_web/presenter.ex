@@ -3,7 +3,7 @@ defmodule SymphonyElixirWeb.Presenter do
   Shared projections for the observability API and dashboard.
   """
 
-  alias SymphonyElixir.{Config, Orchestrator, StatusDashboard}
+  alias SymphonyElixir.{Codex.ReasoningLog, Config, Orchestrator, StatusDashboard}
 
   @spec state_payload(GenServer.name(), timeout()) :: map()
   def state_payload(orchestrator, snapshot_timeout_ms) do
@@ -61,6 +61,8 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   defp issue_payload_body(issue_identifier, running, retry) do
+    reasoning_log_path = reasoning_log_path(issue_identifier, running, retry)
+
     %{
       issue_identifier: issue_identifier,
       issue_id: issue_id_from_entries(running, retry),
@@ -76,7 +78,7 @@ defmodule SymphonyElixirWeb.Presenter do
       running: running && running_issue_payload(running),
       retry: retry && retry_issue_payload(retry),
       logs: %{
-        codex_session_logs: []
+        codex_session_logs: codex_session_logs(reasoning_log_path)
       },
       recent_events: (running && recent_events_payload(running)) || [],
       last_error: retry && retry.error,
@@ -102,6 +104,7 @@ defmodule SymphonyElixirWeb.Presenter do
       state: entry.state,
       worker_host: Map.get(entry, :worker_host),
       workspace_path: Map.get(entry, :workspace_path),
+      reasoning_log_path: Map.get(entry, :reasoning_log_path),
       session_id: entry.session_id,
       turn_count: Map.get(entry, :turn_count, 0),
       last_event: entry.last_codex_event,
@@ -124,7 +127,8 @@ defmodule SymphonyElixirWeb.Presenter do
       due_at: due_at_iso8601(entry.due_in_ms),
       error: entry.error,
       worker_host: Map.get(entry, :worker_host),
-      workspace_path: Map.get(entry, :workspace_path)
+      workspace_path: Map.get(entry, :workspace_path),
+      reasoning_log_path: Map.get(entry, :reasoning_log_path)
     }
   end
 
@@ -132,6 +136,7 @@ defmodule SymphonyElixirWeb.Presenter do
     %{
       worker_host: Map.get(running, :worker_host),
       workspace_path: Map.get(running, :workspace_path),
+      reasoning_log_path: Map.get(running, :reasoning_log_path),
       session_id: running.session_id,
       turn_count: Map.get(running, :turn_count, 0),
       state: running.state,
@@ -153,7 +158,8 @@ defmodule SymphonyElixirWeb.Presenter do
       due_at: due_at_iso8601(retry.due_in_ms),
       error: retry.error,
       worker_host: Map.get(retry, :worker_host),
-      workspace_path: Map.get(retry, :workspace_path)
+      workspace_path: Map.get(retry, :workspace_path),
+      reasoning_log_path: Map.get(retry, :reasoning_log_path)
     }
   end
 
@@ -165,6 +171,24 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp workspace_host(running, retry) do
     (running && Map.get(running, :worker_host)) || (retry && Map.get(retry, :worker_host))
+  end
+
+  defp reasoning_log_path(issue_identifier, running, retry) do
+    (running && Map.get(running, :reasoning_log_path)) ||
+      (retry && Map.get(retry, :reasoning_log_path)) ||
+      ReasoningLog.path_for_issue(issue_identifier)
+  end
+
+  defp codex_session_logs(nil), do: []
+
+  defp codex_session_logs(path) when is_binary(path) do
+    [
+      %{
+        label: "latest",
+        path: path,
+        url: nil
+      }
+    ]
   end
 
   defp recent_events_payload(running) do

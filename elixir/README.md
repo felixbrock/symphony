@@ -150,6 +150,9 @@ codex:
   reload error until the file is fixed.
 - `server.port` or CLI `--port` enables the optional Phoenix LiveView dashboard and JSON API at
   `/`, `/api/v1/state`, `/api/v1/<issue_identifier>`, and `/api/v1/refresh`.
+- Symphony also mirrors readable Codex agent output into local text logs under
+  `log/codex_sessions/<issue_identifier>/current.log` (or alongside a custom configured
+  `log_file` path) so local tools can `tail -f` each agent's visible output.
 
 ## Web dashboard
 
