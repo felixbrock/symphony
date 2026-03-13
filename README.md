@@ -34,6 +34,10 @@ help with the setup:
 > Set up Symphony for my repository based on
 > https://github.com/openai/symphony/blob/main/elixir/README.md
 
+The repository also includes [`tmux-codex-logs.sh`](/home/felix/repos/symphony/tmux-codex-logs.sh),
+which opens a tmux session and tails per-issue Codex agent-output logs. Client repos can wrap this
+script and pass their own `--logs-root`.
+
 ---
 
 ## License
