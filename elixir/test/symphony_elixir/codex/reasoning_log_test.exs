@@ -38,6 +38,15 @@ defmodule SymphonyElixir.Codex.ReasoningLogTest do
     assert File.read!(path) == ""
   end
 
+  test "delete_issue_log/1 removes the issue log directory", %{log_root: log_root} do
+    path = Path.join([log_root, "codex_sessions", "MT-309", "current.log"])
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, "existing")
+
+    assert :ok = ReasoningLog.delete_issue_log("MT-309")
+    refute File.exists?(Path.dirname(path))
+  end
+
   test "append_update/2 validates metadata and ignores non-output events" do
     assert ReasoningLog.append_update(:bad, %{}) == {:error, :invalid_arguments}
 

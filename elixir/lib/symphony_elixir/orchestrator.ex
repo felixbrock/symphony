@@ -885,10 +885,24 @@ defmodule SymphonyElixir.Orchestrator do
   defp cleanup_issue_workspace(identifier, worker_host \\ nil)
 
   defp cleanup_issue_workspace(identifier, worker_host) when is_binary(identifier) do
+    cleanup_issue_reasoning_log(identifier)
     Workspace.remove_issue_workspaces(identifier, worker_host)
   end
 
   defp cleanup_issue_workspace(_identifier, _worker_host), do: :ok
+
+  defp cleanup_issue_reasoning_log(identifier) when is_binary(identifier) do
+    case ReasoningLog.delete_issue_log(identifier) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Failed to delete reasoning log for issue_identifier=#{identifier}: #{inspect(reason)}")
+        :ok
+    end
+  end
+
+  defp cleanup_issue_reasoning_log(_identifier), do: :ok
 
   defp run_terminal_workspace_cleanup do
     case Tracker.fetch_issues_by_states(Config.settings!().tracker.terminal_states) do

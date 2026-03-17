@@ -21,6 +21,18 @@ defmodule SymphonyElixir.Codex.ReasoningLog do
     File.write(path, "")
   end
 
+  @spec delete_issue_log(String.t()) :: :ok | {:error, term()}
+  def delete_issue_log(issue_identifier) when is_binary(issue_identifier) do
+    issue_identifier
+    |> path_for_issue()
+    |> Path.dirname()
+    |> File.rm_rf()
+    |> case do
+      {:ok, _paths} -> :ok
+      {:error, reason, _path} -> {:error, reason}
+    end
+  end
+
   @spec append_update(map(), map()) :: :ok | {:error, term()}
   def append_update(issue_metadata, update) when is_map(issue_metadata) and is_map(update) do
     issue_identifier = Map.get(issue_metadata, :issue_identifier)
