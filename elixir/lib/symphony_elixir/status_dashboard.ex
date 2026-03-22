@@ -26,17 +26,17 @@ defmodule SymphonyElixir.StatusDashboard do
   @running_row_chrome_width 10
   @default_terminal_columns 115
 
-  @ansi_reset IO.ANSI.reset()
-  @ansi_bold IO.ANSI.bright()
-  @ansi_blue IO.ANSI.blue()
-  @ansi_cyan IO.ANSI.cyan()
-  @ansi_dim IO.ANSI.faint()
-  @ansi_green IO.ANSI.green()
-  @ansi_red IO.ANSI.red()
-  @ansi_orange IO.ANSI.yellow()
-  @ansi_yellow IO.ANSI.yellow()
-  @ansi_magenta IO.ANSI.magenta()
-  @ansi_gray IO.ANSI.light_black()
+  @ansi_reset :reset
+  @ansi_bold :bold
+  @ansi_blue :blue
+  @ansi_cyan :cyan
+  @ansi_dim :dim
+  @ansi_green :green
+  @ansi_red :red
+  @ansi_orange :orange
+  @ansi_yellow :yellow
+  @ansi_magenta :magenta
+  @ansi_gray :gray
 
   defstruct [
     :refresh_ms,
@@ -128,6 +128,8 @@ defmodule SymphonyElixir.StatusDashboard do
 
   @spec render_offline_status() :: :ok
   def render_offline_status do
+    refresh_theme_palette()
+
     content =
       [
         colorize("╭─ SYMPHONY STATUS", @ansi_bold),
@@ -331,6 +333,8 @@ defmodule SymphonyElixir.StatusDashboard do
   end
 
   defp format_snapshot_content(snapshot_data, tps, terminal_columns_override \\ nil) do
+    refresh_theme_palette()
+
     case snapshot_data do
       {:ok, %{running: running, retrying: retrying, codex_totals: codex_totals} = snapshot} ->
         rate_limits = Map.get(snapshot, :rate_limits)
@@ -1064,7 +1068,82 @@ defmodule SymphonyElixir.StatusDashboard do
   defp closing_border, do: "╰─"
 
   defp colorize(value, code) do
-    "#{code}#{value}#{@ansi_reset}"
+    "#{ansi_code(code)}#{value}#{ansi_code(@ansi_reset)}"
+  end
+
+  defp ansi_code(:reset), do: "\e[0m"
+
+  defp ansi_code(name) when is_atom(name) do
+    Map.fetch!(theme_palette(), name)
+  end
+
+  defp theme_palette do
+    Process.get({__MODULE__, :theme_palette}) || refresh_theme_palette()
+  end
+
+  defp refresh_theme_palette do
+    palette =
+      case dashboard_theme() do
+        :light ->
+          %{
+            bold: "\e[1m",
+            blue: "\e[34m",
+            cyan: "\e[34m",
+            dim: "\e[30m",
+            green: "\e[32m",
+            red: "\e[31m",
+            orange: "\e[30m",
+            yellow: "\e[30m",
+            magenta: "\e[35m",
+            gray: "\e[30m"
+          }
+
+        :dark ->
+          %{
+            bold: "\e[1m",
+            blue: "\e[94m",
+            cyan: "\e[96m",
+            dim: "\e[37m",
+            green: "\e[92m",
+            red: "\e[91m",
+            orange: "\e[93m",
+            yellow: "\e[93m",
+            magenta: "\e[95m",
+            gray: "\e[97m"
+          }
+      end
+
+    Process.put({__MODULE__, :theme_palette}, palette)
+    palette
+  end
+
+  defp dashboard_theme do
+    case Application.get_env(:symphony_elixir, :status_dashboard_theme) do
+      :light -> :light
+      "light" -> :light
+      :dark -> :dark
+      "dark" -> :dark
+      _ -> dashboard_theme_from_xterm()
+    end
+  end
+
+  defp dashboard_theme_from_xterm do
+    case File.read(xterm_theme_file()) do
+      {:ok, contents} ->
+        if String.match?(contents, ~r/^XTerm\*background:\s*white\s*$/mi) do
+          :light
+        else
+          :dark
+        end
+
+      _ ->
+        :dark
+    end
+  end
+
+  defp xterm_theme_file do
+    System.get_env("HOME", "")
+    |> Path.join(".Xresources.theme")
   end
 
   @doc false

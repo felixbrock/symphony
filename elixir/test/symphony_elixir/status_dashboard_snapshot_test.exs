@@ -5,6 +5,21 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
 
   @terminal_columns 115
 
+  setup do
+    previous_theme = Application.get_env(:symphony_elixir, :status_dashboard_theme)
+    Application.put_env(:symphony_elixir, :status_dashboard_theme, :dark)
+
+    on_exit(fn ->
+      if is_nil(previous_theme) do
+        Application.delete_env(:symphony_elixir, :status_dashboard_theme)
+      else
+        Application.put_env(:symphony_elixir, :status_dashboard_theme, previous_theme)
+      end
+    end)
+
+    :ok
+  end
+
   test "snapshot fixture: idle dashboard" do
     snapshot_data =
       {:ok,
