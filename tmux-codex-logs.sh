@@ -167,15 +167,41 @@ spawn_log_window() {
   tmux new-window -d -t "${session}:" -n "${window_name}" "bash -lc ${command}"
 }
 
+prune_stale_log_windows() {
+  local session="$1"
+  shift
+  local active_windows=("$@")
+  local window_name
+
+  while IFS= read -r window_name; do
+    if [[ "${window_name}" != log:* ]]; then
+      continue
+    fi
+
+    if [[ " ${active_windows[*]} " == *" ${window_name} "* ]]; then
+      continue
+    fi
+
+    tmux kill-window -t "${session}:${window_name}"
+  done < <(tmux list-windows -t "${session}" -F '#W' 2>/dev/null || true)
+}
+
 sync_log_windows() {
   local session="$1"
   local found=0
   local target_window
+  local active_windows=()
+  local issue window_name
 
   while IFS= read -r log_path; do
     found=1
+    issue="$(basename "$(dirname "${log_path}")")"
+    window_name="$(sanitize_window_name "${issue}")"
+    active_windows+=("${window_name}")
     spawn_log_window "${session}" "${log_path}"
   done < <(find "${logs_root}" -mindepth 2 -maxdepth 2 -type f \( -name current.log -o -name current.ndjson \) | sort)
+
+  prune_stale_log_windows "${session}" "${active_windows[@]}"
 
   if [ "${found}" -eq 0 ]; then
     ensure_status_window "${session}"
