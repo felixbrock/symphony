@@ -98,6 +98,9 @@ defmodule SymphonyElixir.Config do
     end
   end
 
+  @spec agent_provider() :: String.t()
+  def agent_provider, do: settings!().agent.provider
+
   @spec codex_runtime_settings(Path.t() | nil, keyword()) ::
           {:ok, codex_runtime_settings()} | {:error, term()}
   def codex_runtime_settings(workspace \\ nil, opts \\ []) do

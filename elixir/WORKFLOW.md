@@ -26,6 +26,7 @@ hooks:
   before_remove: |
     cd elixir && mise exec -- mix workspace.before_remove
 agent:
+  provider: $SYMPHONY_AGENT_PROVIDER
   max_concurrent_agents: 10
   max_turns: 20
 codex:
@@ -34,6 +35,10 @@ codex:
   thread_sandbox: workspace-write
   turn_sandbox_policy:
     type: workspaceWrite
+claude:
+  model: claude-opus-4-6
+  api_key: $ANTHROPIC_API_KEY
+  max_tokens: 32768
 ---
 
 You are working on a Linear ticket `{{ issue.identifier }}`
