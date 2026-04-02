@@ -7,11 +7,6 @@ tracker:
     - In Progress
     - Rework
   terminal_states:
-    - Closed
-    - Cancelled
-    - Canceled
-    - Duplicate
-    - Done
     - Agent Review
     - Human Review
 polling:
@@ -116,7 +111,6 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 - `Agent Review` -> terminal for this workflow; the review workflow (WORKFLOW_REVIEW.md) takes over from here.
 - `Human Review` -> terminal for this workflow; blocked on direct human intervention.
 - `Rework` -> reviewer requested changes; planning + implementation required.
-- `Done` -> terminal state; no further action required.
 
 ## Step 0: Determine current ticket state and route
 
@@ -127,7 +121,7 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
    - `Todo` -> immediately move to `In Progress`, then ensure bootstrap workpad comment exists (create if missing), then start execution flow.
      - If PR is already attached, start by reviewing all open PR comments and deciding required changes vs explicit pushback responses.
    - `In Progress` -> continue execution flow from current scratchpad comment.
-   - `Agent Review` / `Human Review` / `Done` -> do nothing and shut down.
+   - `Agent Review` / `Human Review` -> do nothing and shut down.
 4. Check whether a PR already exists for the current branch and whether it is closed.
    - If a branch PR exists and is `CLOSED` or `MERGED`, treat prior branch work as non-reusable for this run.
    - Create a fresh branch from `origin/main` and restart execution flow as a new attempt.
@@ -170,7 +164,7 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 
 ## PR feedback sweep protocol (required)
 
-When a ticket has an attached PR, run this protocol before moving to `Human Review`:
+When a ticket has an attached PR, run this protocol before moving to `Agent Review`:
 
 1. Identify the PR number from issue links/attachments.
 2. Gather feedback from all channels:
@@ -196,7 +190,7 @@ Use this only when completion is blocked by missing required tools or missing au
   - exact human action needed to unblock.
 - Keep the brief concise and action-oriented; do not add extra top-level comments outside the workpad.
 
-## Step 2: Execution phase (Todo -> In Progress -> Human Review)
+## Step 2: Execution phase (Todo -> In Progress -> Agent Review)
 
 1.  Determine current repo state (`branch`, `git status`, `HEAD`) and verify the kickoff `pull` sync result is already recorded in the workpad before implementation continues.
 2.  If current issue state is `Todo`, move it to `In Progress`; otherwise leave the current state unchanged.
@@ -246,7 +240,6 @@ Use this only when completion is blocked by missing required tools or missing au
 
 `Human Review` is a terminal state for this workflow. When the issue is in `Human Review`, do not code or change ticket content. The ticket is blocked on direct human intervention; shut down and wait for the human to resolve the blocker and move the ticket back to an active state.
 
-`Done` is also terminal for this workflow. `Merging` is only reachable via the review workflow (WORKFLOW_REVIEW.md) and will never be encountered here.
 
 ## Step 4: Rework handling
 
@@ -285,9 +278,9 @@ Use this only when completion is blocked by missing required tools or missing au
   title/description/acceptance criteria, same-project assignment, a `related`
   link to the current issue, and `blockedBy` when the follow-up depends on the
   current issue.
-- Do not move to `Human Review` unless the `Completion bar before Human Review` is satisfied.
-- In `Human Review`, do not make changes; wait and poll.
-- If state is `Agent Review`, `Human Review`, or `Done`, do nothing and shut down.
+- Do not move to `Human Review` unless the ticket is genuinely blocked per the blocked-access escape hatch criteria.
+- In `Human Review`, do not make changes; shut down.
+- If state is `Agent Review` or `Human Review`, do nothing and shut down.
 - Keep issue text concise, specific, and reviewer-oriented.
 - If blocked and no workpad exists yet, add one blocker comment describing blocker, impact, and next unblock action.
 
