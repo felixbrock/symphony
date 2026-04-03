@@ -32,9 +32,8 @@ codex:
   turn_sandbox_policy:
     type: workspaceWrite
 claude:
-  model: claude-sonnet-4-6
+  command: claude --dangerously-skip-permissions --print --output-format stream-json --verbose --model claude-sonnet-4-6
   api_key: $ANTHROPIC_API_KEY
-  max_tokens: 32768
 ---
 
 You are working on a Linear ticket `{{ issue.identifier }}`

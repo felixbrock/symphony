@@ -1,204 +1,176 @@
 defmodule SymphonyElixir.Claude.AppServer do
   @moduledoc """
-  Claude agent backend using the Anthropic Messages API with a bash tool.
+  Claude Code CLI backend using `--print --output-format stream-json --verbose`.
+
+  Spawns `claude --print` per Symphony turn and resumes the session via
+  `--resume <session_id>` when a prior turn exists, preserving conversation
+  context across Symphony turns without managing message history manually.
 
   Implements the same start_session/run_turn/stop_session interface as
-  `SymphonyElixir.Codex.AppServer`, allowing the two providers to be
-  used interchangeably by `AgentRunner`.
+  `SymphonyElixir.Codex.AppServer`.
   """
 
   require Logger
   alias SymphonyElixir.Config
 
-  @api_url "https://api.anthropic.com/v1/messages"
-  @anthropic_version "2023-06-01"
-  @bash_tool %{
-    "name" => "bash",
-    "description" => "Run a shell command in the workspace directory. Use this to read files, write files, run tests, execute git commands, and perform any other workspace operations.",
-    "input_schema" => %{
-      "type" => "object",
-      "properties" => %{
-        "command" => %{
-          "type" => "string",
-          "description" => "Shell command to run in the workspace"
-        }
-      },
-      "required" => ["command"]
-    }
-  }
+  @port_line_bytes 1_048_576
 
   @type session :: %{
-          api_key: String.t(),
-          model: String.t(),
-          max_tokens: pos_integer(),
-          turn_timeout_ms: pos_integer(),
+          session_agent: pid(),
           workspace: Path.t(),
-          worker_host: String.t() | nil,
-          messages: [map()]
+          command: String.t(),
+          api_key: String.t() | nil,
+          turn_timeout_ms: pos_integer()
         }
 
   @spec start_session(Path.t(), keyword()) :: {:ok, session()} | {:error, term()}
-  def start_session(workspace, opts \\ []) do
-    worker_host = Keyword.get(opts, :worker_host)
+  def start_session(workspace, _opts \\ []) do
     claude_config = Config.settings!().claude
+    {:ok, agent} = Agent.start_link(fn -> nil end)
 
-    case claude_config.api_key do
-      nil ->
-        {:error, :missing_anthropic_api_key}
-
-      "" ->
-        {:error, :missing_anthropic_api_key}
-
-      api_key ->
-        expanded_workspace = Path.expand(workspace)
-
-        {:ok,
-         %{
-           api_key: api_key,
-           model: claude_config.model,
-           max_tokens: claude_config.max_tokens,
-           turn_timeout_ms: claude_config.turn_timeout_ms,
-           workspace: expanded_workspace,
-           worker_host: worker_host,
-           messages: []
-         }}
-    end
+    {:ok,
+     %{
+       session_agent: agent,
+       workspace: Path.expand(workspace),
+       command: claude_config.command,
+       api_key: claude_config.api_key,
+       turn_timeout_ms: claude_config.turn_timeout_ms
+     }}
   end
 
   @spec run_turn(session(), String.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
-  def run_turn(session, prompt, _issue, opts \\ []) do
+  def run_turn(session, prompt, issue, opts \\ []) do
     on_message = Keyword.get(opts, :on_message, fn _msg -> :ok end)
-    messages = session.messages ++ [%{"role" => "user", "content" => prompt}]
+    prior_session_id = Agent.get(session.session_agent, & &1)
 
-    deadline = System.monotonic_time(:millisecond) + session.turn_timeout_ms
+    {executable, args} = build_command(session.command, prior_session_id)
+    env = build_env(session.api_key)
 
-    case agentic_loop(session, messages, on_message, deadline) do
-      {:ok, final_messages} ->
-        {:ok, %{session_id: generate_session_id(), messages: final_messages}}
+    Logger.info(
+      "Claude CLI starting for #{issue_context(issue)} workspace=#{session.workspace} resume=#{inspect(prior_session_id)}"
+    )
+
+    case run_cli(executable, args ++ [prompt], env, session.workspace, session.turn_timeout_ms, on_message) do
+      {:ok, new_session_id, result} ->
+        Agent.update(session.session_agent, fn _ -> new_session_id end)
+
+        Logger.info(
+          "Claude CLI completed for #{issue_context(issue)} session_id=#{new_session_id}"
+        )
+
+        {:ok, %{result: result, session_id: new_session_id}}
 
       {:error, reason} ->
+        Logger.warning("Claude CLI failed for #{issue_context(issue)}: #{inspect(reason)}")
         {:error, reason}
     end
   end
 
   @spec stop_session(session()) :: :ok
-  def stop_session(_session), do: :ok
+  def stop_session(%{session_agent: agent}) do
+    Agent.stop(agent)
+    :ok
+  end
 
-  defp agentic_loop(session, messages, on_message, deadline) do
-    remaining_ms = deadline - System.monotonic_time(:millisecond)
+  # --- private ---
 
-    if remaining_ms <= 0 do
+  defp build_command(command_str, nil) do
+    [executable | args] = String.split(command_str)
+    {executable, args}
+  end
+
+  defp build_command(command_str, session_id) do
+    {executable, args} = build_command(command_str, nil)
+    {executable, args ++ ["--resume", session_id]}
+  end
+
+  defp build_env(nil), do: []
+  defp build_env(""), do: []
+  defp build_env(api_key), do: [{"ANTHROPIC_API_KEY", api_key}]
+
+  defp run_cli(executable, args, env, workspace, timeout_ms, on_message) do
+    resolved = System.find_executable(executable) || executable
+
+    port =
+      Port.open(
+        {:spawn_executable, String.to_charlist(resolved)},
+        [
+          :binary,
+          :exit_status,
+          :stderr_to_stdout,
+          {:args, Enum.map(args, &String.to_charlist/1)},
+          {:cd, String.to_charlist(workspace)},
+          {:env, Enum.map(env, fn {k, v} -> {String.to_charlist(k), String.to_charlist(v)} end)},
+          {:line, @port_line_bytes}
+        ]
+      )
+
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    collect_output(port, %{session_id: nil, result: nil, partial: ""}, deadline, on_message)
+  end
+
+  defp collect_output(port, acc, deadline, on_message) do
+    remaining = deadline - System.monotonic_time(:millisecond)
+
+    if remaining <= 0 do
+      Port.close(port)
       {:error, :turn_timeout}
     else
-      request_body = %{
-        "model" => session.model,
-        "max_tokens" => session.max_tokens,
-        "tools" => [@bash_tool],
-        "messages" => messages
-      }
+      receive do
+        {^port, {:data, {:eol, line}}} ->
+          full_line = acc.partial <> line
+          acc = process_line(full_line, %{acc | partial: ""}, on_message)
+          collect_output(port, acc, deadline, on_message)
 
-      case call_api(session.api_key, request_body, min(remaining_ms, 120_000)) do
-        {:ok, %{"stop_reason" => "end_turn", "content" => content}} ->
-          text = extract_text(content)
-          on_message.(%{type: "agent_response", content: text})
-          Logger.info("Claude turn completed workspace=#{session.workspace}")
-          {:ok, messages ++ [%{"role" => "assistant", "content" => content}]}
+        {^port, {:data, {:noeol, chunk}}} ->
+          collect_output(port, %{acc | partial: acc.partial <> chunk}, deadline, on_message)
 
-        {:ok, %{"stop_reason" => "tool_use", "content" => content}} ->
-          on_message.(%{type: "tool_use", content: summarize_tool_calls(content)})
-          updated_messages = messages ++ [%{"role" => "assistant", "content" => content}]
-
-          case execute_tool_calls(content, session.workspace) do
-            {:ok, tool_results} ->
-              next_messages = updated_messages ++ [%{"role" => "user", "content" => tool_results}]
-              agentic_loop(session, next_messages, on_message, deadline)
-
-            {:error, reason} ->
-              {:error, reason}
+        {^port, {:exit_status, 0}} ->
+          case acc.session_id do
+            nil -> {:error, :no_session_id_in_output}
+            id -> {:ok, id, acc.result || ""}
           end
 
-        {:error, :credits_exhausted} ->
-          {:error, :claude_credits_exhausted}
-
-        {:error, reason} ->
-          {:error, reason}
+        {^port, {:exit_status, code}} ->
+          {:error, {:cli_exit_code, code}}
+      after
+        min(remaining, 30_000) ->
+          collect_output(port, acc, deadline, on_message)
       end
     end
   end
 
-  defp call_api(api_key, body, timeout_ms) do
-    headers = [
-      {"x-api-key", api_key},
-      {"anthropic-version", @anthropic_version},
-      {"content-type", "application/json"}
-    ]
-
-    case Req.post(@api_url, json: body, headers: headers, receive_timeout: timeout_ms) do
-      {:ok, %Req.Response{status: status, body: response_body}} when status in 200..299 ->
-        {:ok, response_body}
-
-      {:ok, %Req.Response{status: 402}} ->
-        {:error, :credits_exhausted}
-
-      {:ok, %Req.Response{status: status, body: response_body}} ->
-        Logger.error("Claude API error status=#{status} body=#{inspect(response_body)}")
-        {:error, {:claude_api_error, status, response_body}}
-
-      {:error, reason} ->
-        Logger.error("Claude API request failed: #{inspect(reason)}")
-        {:error, {:claude_request_failed, reason}}
+  defp process_line(line, acc, on_message) do
+    case Jason.decode(line) do
+      {:ok, event} -> handle_event(event, acc, on_message)
+      _ -> acc
     end
   end
 
-  defp execute_tool_calls(content, workspace) do
-    tool_uses = Enum.filter(content, fn block -> block["type"] == "tool_use" end)
-
-    results =
-      Enum.map(tool_uses, fn %{"id" => tool_use_id, "name" => "bash", "input" => %{"command" => command}} ->
-        Logger.debug("Claude bash tool command=#{inspect(command)} workspace=#{workspace}")
-        {output, exit_code} = System.cmd("bash", ["-c", command], cd: workspace, stderr_to_stdout: true)
-
-        result_content =
-          if exit_code == 0 do
-            output
-          else
-            "Exit code #{exit_code}\n#{output}"
-          end
-
-        %{
-          "type" => "tool_result",
-          "tool_use_id" => tool_use_id,
-          "content" => result_content
-        }
-      end)
-
-    {:ok, results}
-  rescue
-    e ->
-      {:error, {:tool_execution_error, Exception.message(e)}}
+  defp handle_event(%{"type" => "system", "session_id" => id}, acc, _on_message) do
+    %{acc | session_id: id}
   end
+
+  defp handle_event(%{"type" => "assistant", "message" => %{"content" => content}}, acc, on_message) do
+    text = extract_text(content)
+    if text != "", do: on_message.(%{type: "agent_response", content: text})
+    acc
+  end
+
+  defp handle_event(%{"type" => "result", "result" => result}, acc, _on_message) do
+    %{acc | result: result}
+  end
+
+  defp handle_event(_event, acc, _on_message), do: acc
 
   defp extract_text(content) when is_list(content) do
     content
-    |> Enum.filter(fn block -> block["type"] == "text" end)
-    |> Enum.map_join("\n", fn %{"text" => text} -> text end)
+    |> Enum.filter(&(&1["type"] == "text"))
+    |> Enum.map_join("\n", & &1["text"])
   end
 
   defp extract_text(_), do: ""
 
-  defp summarize_tool_calls(content) when is_list(content) do
-    content
-    |> Enum.filter(fn block -> block["type"] == "tool_use" end)
-    |> Enum.map_join(", ", fn %{"name" => name, "input" => input} ->
-      cmd = Map.get(input, "command", "")
-      truncated = if String.length(cmd) > 80, do: String.slice(cmd, 0, 80) <> "…", else: cmd
-      "#{name}(#{truncated})"
-    end)
-  end
-
-  defp summarize_tool_calls(_), do: ""
-
-  defp generate_session_id do
-    :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
-  end
+  defp issue_context(%{identifier: id}) when is_binary(id), do: "issue_identifier=#{id}"
+  defp issue_context(_), do: "issue=unknown"
 end
