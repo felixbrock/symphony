@@ -136,12 +136,15 @@ defmodule SymphonyElixir.Claude.AppServer do
           collect_output(port, %{acc | partial: acc.partial <> chunk}, deadline, on_message)
 
         {^port, {:exit_status, 0}} ->
+          if acc.partial != "", do: Logger.debug("Claude CLI non-JSON (exit): #{acc.partial}")
+
           case acc.session_id do
             nil -> {:error, :no_session_id_in_output}
             id -> {:ok, id, acc.result || ""}
           end
 
         {^port, {:exit_status, code}} ->
+          if acc.partial != "", do: Logger.warning("Claude CLI exit=#{code} trailing: #{acc.partial}")
           {:error, {:cli_exit_code, code}}
       after
         min(remaining, 30_000) ->
@@ -152,8 +155,12 @@ defmodule SymphonyElixir.Claude.AppServer do
 
   defp process_line(line, acc, on_message) do
     case Jason.decode(line) do
-      {:ok, event} -> handle_event(event, acc, on_message)
-      _ -> acc
+      {:ok, event} ->
+        handle_event(event, acc, on_message)
+
+      _ ->
+        if line != "", do: Logger.debug("Claude CLI non-JSON: #{line}")
+        acc
     end
   end
 
