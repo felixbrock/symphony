@@ -416,10 +416,7 @@ defmodule SymphonyElixir.Config.Schema do
       | provider: resolve_secret_setting(settings.agent.provider, "claude")
     }
 
-    claude = %{
-      settings.claude
-      | api_key: resolve_secret_setting(settings.claude.api_key, System.get_env("ANTHROPIC_API_KEY"))
-    }
+    claude = settings.claude
 
     %{settings | tracker: tracker, workspace: workspace, codex: codex, agent: agent, claude: claude}
   end

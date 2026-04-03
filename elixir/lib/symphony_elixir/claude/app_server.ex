@@ -84,13 +84,11 @@ defmodule SymphonyElixir.Claude.AppServer do
     {executable, args ++ ["--resume", session_id]}
   end
 
-  defp build_env(nil), do: System.get_env() |> Enum.to_list()
-  defp build_env(""), do: System.get_env() |> Enum.to_list()
-
-  defp build_env(api_key) do
-    # Inherit the full parent environment and override the API key.
+  # Always strip ANTHROPIC_API_KEY so the claude subprocess uses the user's
+  # login session (Claude subscription) rather than billing to an API key.
+  defp build_env(_api_key) do
     System.get_env()
-    |> Map.put("ANTHROPIC_API_KEY", api_key)
+    |> Map.delete("ANTHROPIC_API_KEY")
     |> Enum.to_list()
   end
 

@@ -33,7 +33,6 @@ codex:
     type: workspaceWrite
 claude:
   command: claude --dangerously-skip-permissions --print --output-format stream-json --verbose --model claude-sonnet-4-6
-  api_key: $ANTHROPIC_API_KEY
 ---
 
 You are working on a Linear ticket `{{ issue.identifier }}`
