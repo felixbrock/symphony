@@ -84,9 +84,15 @@ defmodule SymphonyElixir.Claude.AppServer do
     {executable, args ++ ["--resume", session_id]}
   end
 
-  defp build_env(nil), do: []
-  defp build_env(""), do: []
-  defp build_env(api_key), do: [{"ANTHROPIC_API_KEY", api_key}]
+  defp build_env(nil), do: System.get_env() |> Enum.to_list()
+  defp build_env(""), do: System.get_env() |> Enum.to_list()
+
+  defp build_env(api_key) do
+    # Inherit the full parent environment and override the API key.
+    System.get_env()
+    |> Map.put("ANTHROPIC_API_KEY", api_key)
+    |> Enum.to_list()
+  end
 
   defp run_cli(executable, args, env, workspace, timeout_ms, on_message) do
     resolved = System.find_executable(executable) || executable
