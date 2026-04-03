@@ -105,8 +105,14 @@ defmodule SymphonyElixir.Claude.AppServer do
         ]
       )
 
+    os_pid =
+      case Port.info(port, :os_pid) do
+        {:os_pid, pid} -> Integer.to_string(pid)
+        _ -> nil
+      end
+
     deadline = System.monotonic_time(:millisecond) + timeout_ms
-    collect_output(port, %{session_id: nil, result: nil, partial: ""}, deadline, on_message)
+    collect_output(port, %{session_id: nil, result: nil, partial: "", os_pid: os_pid}, deadline, on_message)
   end
 
   defp collect_output(port, acc, deadline, on_message) do
@@ -147,17 +153,54 @@ defmodule SymphonyElixir.Claude.AppServer do
     end
   end
 
-  defp handle_event(%{"type" => "system", "session_id" => id}, acc, _on_message) do
+  # System init — record session_id and announce session start to orchestrator.
+  defp handle_event(%{"type" => "system", "session_id" => id}, acc, on_message) do
+    on_message.(%{
+      event: :session_started,
+      timestamp: DateTime.utc_now(),
+      session_id: id,
+      codex_app_server_pid: acc.os_pid
+    })
+
     %{acc | session_id: id}
   end
 
+  # Assistant turn — forward text payload so the dashboard can display it.
   defp handle_event(%{"type" => "assistant", "message" => %{"content" => content}}, acc, on_message) do
     text = extract_text(content)
-    if text != "", do: on_message.(%{type: "agent_response", content: text})
+
+    if text != "" do
+      on_message.(%{
+        event: :agent_response,
+        timestamp: DateTime.utc_now(),
+        session_id: acc.session_id,
+        codex_app_server_pid: acc.os_pid,
+        payload: text
+      })
+    end
+
     acc
   end
 
-  defp handle_event(%{"type" => "result", "result" => result}, acc, _on_message) do
+  # Final result — record token usage so the dashboard totals are populated.
+  defp handle_event(%{"type" => "result", "result" => result} = event, acc, on_message) do
+    raw_usage = Map.get(event, "usage", %{})
+
+    usage =
+      Map.take(raw_usage, ["input_tokens", "output_tokens"]) |> then(fn u ->
+        total = Map.get(u, "input_tokens", 0) + Map.get(u, "output_tokens", 0)
+        Map.put_new(u, "total_tokens", total)
+      end)
+
+    on_message.(%{
+      event: :turn_completed,
+      method: "turn/completed",
+      timestamp: DateTime.utc_now(),
+      session_id: acc.session_id,
+      codex_app_server_pid: acc.os_pid,
+      usage: usage
+    })
+
     %{acc | result: result}
   end
 
