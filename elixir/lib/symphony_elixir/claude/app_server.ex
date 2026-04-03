@@ -50,7 +50,7 @@ defmodule SymphonyElixir.Claude.AppServer do
       "Claude CLI starting for #{issue_context(issue)} workspace=#{session.workspace} resume=#{inspect(prior_session_id)}"
     )
 
-    case run_cli(executable, args ++ [prompt], env, session.workspace, session.turn_timeout_ms, on_message) do
+    case run_cli(executable, args ++ ["--", prompt], env, session.workspace, session.turn_timeout_ms, on_message) do
       {:ok, new_session_id, result} ->
         Agent.update(session.session_agent, fn _ -> new_session_id end)
 
