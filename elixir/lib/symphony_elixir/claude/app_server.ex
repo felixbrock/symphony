@@ -46,11 +46,13 @@ defmodule SymphonyElixir.Claude.AppServer do
     {executable, args} = build_command(session.command, prior_session_id)
     env = build_env(session.api_key)
 
+    full_args = args ++ ["--", prompt]
+
     Logger.info(
-      "Claude CLI starting for #{issue_context(issue)} workspace=#{session.workspace} resume=#{inspect(prior_session_id)}"
+      "Claude CLI starting for #{issue_context(issue)} workspace=#{session.workspace} resume=#{inspect(prior_session_id)} executable=#{executable} args_count=#{length(full_args)} prompt_bytes=#{byte_size(prompt)}"
     )
 
-    case run_cli(executable, args ++ ["--", prompt], env, session.workspace, session.turn_timeout_ms, on_message) do
+    case run_cli(executable, full_args, env, session.workspace, session.turn_timeout_ms, on_message) do
       {:ok, new_session_id, result} ->
         Agent.update(session.session_agent, fn _ -> new_session_id end)
 
@@ -149,6 +151,7 @@ defmodule SymphonyElixir.Claude.AppServer do
 
         {^port, {:exit_status, code}} ->
           if acc.partial != "", do: Logger.warning("Claude CLI exit=#{code} trailing: #{acc.partial}")
+          Logger.warning("Claude CLI exited code=#{code} session_id=#{inspect(acc.session_id)} lines_received=#{acc[:lines_received] || 0}")
           {:error, {:cli_exit_code, code}}
       after
         min(remaining, 30_000) ->
