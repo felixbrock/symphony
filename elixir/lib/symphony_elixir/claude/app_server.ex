@@ -122,7 +122,7 @@ defmodule SymphonyElixir.Claude.AppServer do
       end
 
     deadline = System.monotonic_time(:millisecond) + timeout_ms
-    collect_output(port, %{session_id: nil, result: nil, partial: "", os_pid: os_pid}, deadline, on_message)
+    collect_output(port, %{session_id: nil, result: nil, partial: "", os_pid: os_pid, event_log: []}, deadline, on_message)
   end
 
   defp collect_output(port, acc, deadline, on_message) do
@@ -151,7 +151,7 @@ defmodule SymphonyElixir.Claude.AppServer do
 
         {^port, {:exit_status, code}} ->
           if acc.partial != "", do: Logger.warning("Claude CLI exit=#{code} trailing: #{acc.partial}")
-          Logger.warning("Claude CLI exited code=#{code} session_id=#{inspect(acc.session_id)} lines_received=#{acc[:lines_received] || 0}")
+          Logger.warning("Claude CLI exited code=#{code} session_id=#{inspect(acc.session_id)} events=#{inspect(Enum.reverse(acc.event_log))}")
           {:error, {:cli_exit_code, code}}
       after
         min(remaining, 30_000) ->
@@ -163,6 +163,10 @@ defmodule SymphonyElixir.Claude.AppServer do
   defp process_line(line, acc, on_message) do
     case Jason.decode(line) do
       {:ok, event} ->
+        event_type = Map.get(event, "type", "?")
+        event_subtype = Map.get(event, "subtype")
+        tag = if event_subtype, do: "#{event_type}/#{event_subtype}", else: event_type
+        acc = %{acc | event_log: [tag | acc.event_log]}
         handle_event(event, acc, on_message)
 
       _ ->
