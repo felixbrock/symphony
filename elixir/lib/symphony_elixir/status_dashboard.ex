@@ -357,6 +357,7 @@ defmodule SymphonyElixir.StatusDashboard do
              colorize("#{agent_count}", @ansi_green) <>
              colorize("/", @ansi_gray) <>
              colorize("#{max_agents}", @ansi_gray),
+           format_model_line(),
            colorize("│ Throughput: ", @ansi_bold) <> colorize("#{format_tps(tps)} tps", @ansi_cyan),
            colorize("│ Runtime: ", @ansi_bold) <>
              colorize(format_runtime_seconds(codex_seconds_running), @ansi_magenta),
@@ -429,6 +430,27 @@ defmodule SymphonyElixir.StatusDashboard do
 
   defp format_project_refresh_line(_) do
     colorize("│ Next refresh: ", @ansi_bold) <> colorize("n/a", @ansi_gray)
+  end
+
+  defp format_model_line do
+    provider = Config.agent_provider()
+
+    command =
+      case provider do
+        "claude" -> Config.settings!().claude.command
+        _ -> Config.settings!().codex.command
+      end
+
+    model_str =
+      case Regex.run(~r/--model\s+(\S+)/, command) do
+        [_, model] ->
+          colorize(model, @ansi_cyan) <> colorize(" (#{provider})", @ansi_gray)
+
+        _ ->
+          colorize(provider, @ansi_cyan)
+      end
+
+    colorize("│ Model: ", @ansi_bold) <> model_str
   end
 
   defp linear_project_url(project_slug), do: "https://linear.app/project/#{project_slug}/issues"
