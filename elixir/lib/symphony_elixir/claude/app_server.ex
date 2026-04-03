@@ -74,14 +74,18 @@ defmodule SymphonyElixir.Claude.AppServer do
 
   # --- private ---
 
-  defp build_command(command_str, nil) do
-    [executable | args] = String.split(command_str)
-    {executable, args}
-  end
-
   defp build_command(command_str, session_id) do
-    {executable, args} = build_command(command_str, nil)
-    {executable, args ++ ["--resume", session_id]}
+    [executable | flags] = String.split(command_str)
+
+    resume_flags =
+      case session_id do
+        nil -> []
+        id -> ["--resume", id]
+      end
+
+    # Wrap in bash so we can redirect stdin from /dev/null without shell-escaping
+    # the prompt. "$@" expands to all positional args (flags + prompt) unchanged.
+    {"/bin/bash", ["-c", ~s(exec "$@" </dev/null), "_", executable] ++ flags ++ resume_flags}
   end
 
   # Always strip ANTHROPIC_API_KEY so the claude subprocess uses the user's
