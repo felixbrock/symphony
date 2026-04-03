@@ -36,7 +36,7 @@ codex:
   turn_sandbox_policy:
     type: workspaceWrite
 claude:
-  model: claude-opus-4-6
+  model: claude-sonnet-4-6
   api_key: $ANTHROPIC_API_KEY
   max_tokens: 32768
 ---

@@ -32,7 +32,7 @@ codex:
   turn_sandbox_policy:
     type: workspaceWrite
 claude:
-  model: claude-opus-4-6
+  model: claude-sonnet-4-6
   api_key: $ANTHROPIC_API_KEY
   max_tokens: 32768
 ---
@@ -239,7 +239,6 @@ Use this only when completion is blocked by missing required tools or missing au
 ## Step 3: Human Review handling
 
 `Human Review` is a terminal state for this workflow. When the issue is in `Human Review`, do not code or change ticket content. The ticket is blocked on direct human intervention; shut down and wait for the human to resolve the blocker and move the ticket back to an active state.
-
 
 ## Step 4: Rework handling
 
