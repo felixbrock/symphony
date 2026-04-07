@@ -1251,6 +1251,15 @@ defmodule SymphonyElixir.StatusDashboard do
   defp humanize_codex_event(:turn_failed, _message, payload), do: humanize_codex_method("turn/failed", payload)
   defp humanize_codex_event(:turn_cancelled, _message, _payload), do: "turn cancelled"
   defp humanize_codex_event(:malformed, _message, _payload), do: "malformed JSON event from codex"
+
+  defp humanize_codex_event(:turn_completed, _message, payload) do
+    total = map_value(payload, ["total_tokens", :total_tokens])
+    if is_integer(total) and total > 0, do: "turn completed (#{format_count(total)} tok)", else: "turn completed"
+  end
+
+  defp humanize_codex_event(:agent_response, _message, payload) when is_binary(payload) and payload != "",
+    do: inline_text(payload)
+
   defp humanize_codex_event(_event, _message, _payload), do: nil
 
   defp unwrap_codex_message_payload(%{} = message) do

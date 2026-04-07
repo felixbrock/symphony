@@ -92,9 +92,13 @@ defmodule SymphonyElixir.Claude.AppServer do
 
   # Always strip ANTHROPIC_API_KEY so the claude subprocess uses the user's
   # login session (Claude subscription) rather than billing to an API key.
+  # Also strip CLAUDECODE and CLAUDE_CODE_ENTRYPOINT so nested claude processes
+  # don't detect a parent Claude Code session and suppress tool execution.
   defp build_env(_api_key) do
     System.get_env()
     |> Map.delete("ANTHROPIC_API_KEY")
+    |> Map.delete("CLAUDECODE")
+    |> Map.delete("CLAUDE_CODE_ENTRYPOINT")
     |> Enum.to_list()
   end
 
@@ -122,7 +126,7 @@ defmodule SymphonyElixir.Claude.AppServer do
       end
 
     deadline = System.monotonic_time(:millisecond) + timeout_ms
-    collect_output(port, %{session_id: nil, result: nil, partial: "", os_pid: os_pid, event_log: []}, deadline, on_message)
+    collect_output(port, %{session_id: nil, result: nil, cli_error: nil, partial: "", os_pid: os_pid, event_log: []}, deadline, on_message)
   end
 
   defp collect_output(port, acc, deadline, on_message) do
@@ -144,15 +148,31 @@ defmodule SymphonyElixir.Claude.AppServer do
         {^port, {:exit_status, 0}} ->
           if acc.partial != "", do: Logger.debug("Claude CLI non-JSON (exit): #{acc.partial}")
 
-          case acc.session_id do
-            nil -> {:error, :no_session_id_in_output}
-            id -> {:ok, id, acc.result || ""}
+          case {acc.session_id, acc[:cli_error]} do
+            {_, error} when is_binary(error) ->
+              Logger.warning("Claude CLI exited ok but reported is_error=true: #{error}")
+              {:error, {:cli_error, error}}
+
+            {nil, _} -> {:error, :no_session_id_in_output}
+            {id, _}  -> {:ok, id, acc.result || ""}
           end
 
         {^port, {:exit_status, code}} ->
           if acc.partial != "", do: Logger.warning("Claude CLI exit=#{code} trailing: #{acc.partial}")
-          Logger.warning("Claude CLI exited code=#{code} session_id=#{inspect(acc.session_id)} events=#{inspect(Enum.reverse(acc.event_log))}")
-          {:error, {:cli_exit_code, code}}
+
+          case {code, acc.session_id, acc.result, acc[:cli_error]} do
+            {_, _, _, error} when is_binary(error) ->
+              Logger.warning("Claude CLI exited code=#{code} with is_error=true: #{error}")
+              {:error, {:cli_error, error}}
+
+            {_, id, result, _} when is_binary(id) and is_binary(result) ->
+              Logger.debug("Claude CLI exited code=#{code} but result/session present; treating as success")
+              {:ok, id, result}
+
+            _ ->
+              Logger.warning("Claude CLI exited code=#{code} session_id=#{inspect(acc.session_id)} events=#{inspect(Enum.reverse(acc.event_log))}")
+              {:error, {:cli_exit_code, code}}
+          end
       after
         min(remaining, 30_000) ->
           collect_output(port, acc, deadline, on_message)
@@ -190,6 +210,8 @@ defmodule SymphonyElixir.Claude.AppServer do
   # Assistant turn — forward text payload so the dashboard can display it.
   defp handle_event(%{"type" => "assistant", "message" => %{"content" => content}}, acc, on_message) do
     text = extract_text(content)
+    tool_names = content |> Enum.filter(&(&1["type"] == "tool_use")) |> Enum.map(&Map.get(&1, "name")) |> Enum.join(", ")
+    Logger.debug("Claude CLI assistant session=#{inspect(acc.session_id)} text_bytes=#{byte_size(text)} tools=[#{tool_names}]")
 
     if text != "" do
       on_message.(%{
@@ -206,24 +228,31 @@ defmodule SymphonyElixir.Claude.AppServer do
 
   # Final result — record token usage so the dashboard totals are populated.
   defp handle_event(%{"type" => "result", "result" => result} = event, acc, on_message) do
-    raw_usage = Map.get(event, "usage", %{})
+    result_preview = if is_binary(result), do: String.slice(result, 0, 300), else: inspect(result)
+    Logger.info("Claude CLI result for session=#{inspect(acc.session_id)} subtype=#{inspect(Map.get(event, "subtype"))} is_error=#{inspect(Map.get(event, "is_error"))} result_preview=#{inspect(result_preview)} num_turns=#{inspect(Map.get(event, "num_turns"))} events=#{inspect(Enum.reverse(acc.event_log))}")
 
-    usage =
-      Map.take(raw_usage, ["input_tokens", "output_tokens"]) |> then(fn u ->
-        total = Map.get(u, "input_tokens", 0) + Map.get(u, "output_tokens", 0)
-        Map.put_new(u, "total_tokens", total)
-      end)
+    if Map.get(event, "is_error") == true do
+      %{acc | result: result, cli_error: result}
+    else
+      raw_usage = Map.get(event, "usage", %{})
 
-    on_message.(%{
-      event: :turn_completed,
-      method: "turn/completed",
-      timestamp: DateTime.utc_now(),
-      session_id: acc.session_id,
-      codex_app_server_pid: acc.os_pid,
-      usage: usage
-    })
+      usage =
+        Map.take(raw_usage, ["input_tokens", "output_tokens"]) |> then(fn u ->
+          total = Map.get(u, "input_tokens", 0) + Map.get(u, "output_tokens", 0)
+          Map.put_new(u, "total_tokens", total)
+        end)
 
-    %{acc | result: result}
+      on_message.(%{
+        event: :turn_completed,
+        method: "turn/completed",
+        timestamp: DateTime.utc_now(),
+        session_id: acc.session_id,
+        codex_app_server_pid: acc.os_pid,
+        usage: usage
+      })
+
+      %{acc | result: result}
+    end
   end
 
   defp handle_event(_event, acc, _on_message), do: acc

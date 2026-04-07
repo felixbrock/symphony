@@ -1303,7 +1303,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp summarize_codex_update(update) do
     %{
       event: update[:event],
-      message: update[:payload] || update[:raw],
+      message: update[:payload] || update[:raw] || update[:usage],
       timestamp: update[:timestamp]
     }
   end
