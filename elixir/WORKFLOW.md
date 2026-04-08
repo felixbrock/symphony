@@ -7,7 +7,6 @@ tracker:
     - In Progress
     - Rework
   terminal_states:
-    - Agent Review
     - Human Review
 polling:
   interval_ms: 5000

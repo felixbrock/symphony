@@ -86,13 +86,12 @@ This workflow handles only the review half of the ticket lifecycle. The implemen
 
 - `linear`: interact with Linear.
 - `review-linear-ticket`: orientation, review criteria, and routing logic for `Agent Review` tickets.
-- `close-linear-ticket`: merge flow when review passes.
-- `land`: when ticket reaches `Merging`, open and follow `.agent/skills/land/SKILL.md`.
+- `close-linear-ticket`: full merge+delete+Done flow when review passes; internally uses `land` for the merge step.
 
 ## Status map
 
 - `Agent Review` -> review the prior agent's implementation and route to the appropriate next state.
-- `Merging` -> implementation passed review; execute the `land` skill flow (do not call `gh pr merge` directly).
+- `Merging` -> implementation passed review; use `close-linear-ticket` to complete the merge, delete the remote branch, and move to `Done`.
 - `Rework` -> terminal for this workflow session; implementation workflow picks it up next.
 - `Human Review` -> terminal for this workflow session; human must intervene and move it back.
 - `Done` -> terminal state; no further action required.
@@ -103,7 +102,7 @@ This workflow handles only the review half of the ticket lifecycle. The implemen
 2. Read the current state.
 3. Route to the matching flow:
    - `Agent Review` -> run the review flow (Step 1).
-   - `Merging` -> open and follow `.agent/skills/land/SKILL.md`; do not call `gh pr merge` directly.
+   - `Merging` -> use the `close-linear-ticket` skill to complete the merge, delete the remote branch, and move to `Done`.
    - `Done` / `Rework` / `Human Review` -> do nothing and shut down.
 
 ## Step 1: Review flow (Agent Review)
@@ -137,9 +136,7 @@ Open the `review-linear-ticket` skill and follow it in full. In summary:
 
 ## Step 2: Merge handling (Merging)
 
-When the ticket is in `Merging`, open and follow `.agent/skills/land/SKILL.md`, then run the `land` skill in a loop until the PR is merged. Do not call `gh pr merge` directly.
-
-After merge is complete, move the ticket to `Done`.
+When the ticket is in `Merging`, use the `close-linear-ticket` skill. It handles the full flow: find/create the PR, merge via the `land` skill, delete the remote branch, and move to `Done`.
 
 ## Blocked-access escape hatch
 

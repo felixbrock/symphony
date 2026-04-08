@@ -15,8 +15,6 @@ description:
 - Squash-merge the PR once checks pass.
 - Do not yield to the user until the PR is merged; keep the watcher loop running
   unless blocked.
-- No need to delete remote branches after merge; the repo auto-deletes head
-  branches.
 
 ## Preconditions
 
@@ -94,7 +92,6 @@ if ! gh pr checks --watch; then
   exit 1
 fi
 
-# Squash-merge (remote branches auto-delete on merge in this repo)
 gh pr merge --squash --subject "$pr_title" --body "$pr_body"
 ```
 
