@@ -432,6 +432,16 @@ defmodule SymphonyElixir.Orchestrator do
           terminate_task(pid)
         end
 
+        # Kill the OS subprocess (Claude CLI / Codex) by its OS PID.
+        # Killing the Elixir Task above closes the Erlang Port, but the spawned
+        # process may survive: `exec` in the command replaces bash with the
+        # agent binary, so only SIGPIPE reaches it when the port closes — and
+        # the agent ignores SIGPIPE while blocked on an outbound HTTP request.
+        # Without an explicit SIGKILL the orphaned process keeps running and can
+        # continue posting Linear comments or mutating ticket state.
+        os_pid = Map.get(running_entry, :codex_app_server_pid)
+        kill_os_subprocess(os_pid, worker_host)
+
         if is_reference(ref) do
           Process.demonitor(ref, [:flush])
         end
@@ -519,6 +529,38 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp terminate_task(_pid), do: :ok
+
+  # Kill the OS-level agent subprocess (Claude CLI or Codex) by its OS PID.
+  # Called after terminate_task so the Erlang port is already closed; this is
+  # the definitive kill that prevents orphaned agent processes from continuing
+  # to call external APIs or mutate Linear state after symphony has abandoned them.
+
+  defp kill_os_subprocess(nil, _worker_host), do: :ok
+  defp kill_os_subprocess("", _worker_host), do: :ok
+
+  defp kill_os_subprocess(pid_str, nil) when is_binary(pid_str) do
+    case System.cmd("kill", ["-KILL", pid_str], stderr_to_stdout: true) do
+      {_, 0} ->
+        Logger.info("Killed OS subprocess pid=#{pid_str}")
+
+      {msg, _} ->
+        Logger.debug("OS subprocess kill had no effect pid=#{pid_str}: #{String.trim(msg)}")
+    end
+
+    :ok
+  end
+
+  defp kill_os_subprocess(pid_str, worker_host)
+       when is_binary(pid_str) and is_binary(worker_host) do
+    case SymphonyElixir.SSH.run(worker_host, "kill -KILL #{pid_str} 2>/dev/null || true") do
+      {:ok, _} -> Logger.info("Killed remote OS subprocess pid=#{pid_str} host=#{worker_host}")
+      {:error, reason} -> Logger.debug("Remote OS subprocess kill failed pid=#{pid_str}: #{inspect(reason)}")
+    end
+
+    :ok
+  end
+
+  defp kill_os_subprocess(_pid_str, _worker_host), do: :ok
 
   defp choose_issues(issues, state) do
     active_states = active_state_set()
