@@ -207,21 +207,39 @@ defmodule SymphonyElixir.Claude.AppServer do
     %{acc | session_id: id}
   end
 
-  # Assistant turn — forward text payload so the dashboard can display it.
+  # Assistant turn — forward the event so stall detection sees activity and the
+  # dashboard can display it. Tool-use turns carry empty text but still count
+  # as progress: if we only reported non-empty text, Claude sessions running
+  # long tool chains would look stalled and get killed after stall_timeout_ms.
   defp handle_event(%{"type" => "assistant", "message" => %{"content" => content}}, acc, on_message) do
     text = extract_text(content)
     tool_names = content |> Enum.filter(&(&1["type"] == "tool_use")) |> Enum.map(&Map.get(&1, "name")) |> Enum.join(", ")
     Logger.debug("Claude CLI assistant session=#{inspect(acc.session_id)} text_bytes=#{byte_size(text)} tools=[#{tool_names}]")
 
-    if text != "" do
-      on_message.(%{
-        event: :agent_response,
-        timestamp: DateTime.utc_now(),
-        session_id: acc.session_id,
-        codex_app_server_pid: acc.os_pid,
-        payload: text
-      })
-    end
+    payload = if text != "", do: text, else: "[tool_use: #{tool_names}]"
+
+    on_message.(%{
+      event: :agent_response,
+      timestamp: DateTime.utc_now(),
+      session_id: acc.session_id,
+      codex_app_server_pid: acc.os_pid,
+      payload: payload
+    })
+
+    acc
+  end
+
+  # User turn — tool results come back as user-type events. Report them as
+  # activity too so multi-step tool chains (each tool_result is a separate
+  # event) keep the stall timer reset.
+  defp handle_event(%{"type" => "user"}, acc, on_message) do
+    on_message.(%{
+      event: :agent_response,
+      timestamp: DateTime.utc_now(),
+      session_id: acc.session_id,
+      codex_app_server_pid: acc.os_pid,
+      payload: "[tool_result]"
+    })
 
     acc
   end
